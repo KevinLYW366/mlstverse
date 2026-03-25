@@ -29,30 +29,60 @@ readSAM <- function(filename) {
 #' @export
 #'
 #' @examples
+buildDepthSummary <- function(depth, len.loci) {
+  if (nrow(depth) == 0) {
+    return(data.frame(locus_tag=character(),
+                      depth=numeric(),
+                      coverage=numeric(),
+                      coverRatio=numeric(),
+                      len=numeric(),
+                      mapped=integer(),
+                      locus=character(),
+                      stringsAsFactors=FALSE))
+  }
+
+  seqnames <- as.character(depth$seqnames)
+  seq_ids <- unique(seqnames)
+  split_depth <- split(depth$count, seqnames)
+  split_depth <- split_depth[seq_ids]
+  mapped <- lengths(split_depth)
+  total_depth <- vapply(split_depth, sum, numeric(1))
+  seq_len <- as.numeric(len.loci[seq_ids])
+
+  data.frame(locus_tag=sub("^[^_]*_", "", seq_ids),
+             depth=total_depth,
+             coverage=total_depth/seq_len,
+             coverRatio=as.numeric(mapped/seq_len),
+             len=seq_len,
+             mapped=as.integer(mapped),
+             locus=sub("_.*$", "", seq_ids),
+             stringsAsFactors=FALSE)
+}
+
 createQuery <- function(loci, depth, len.loci, threads=1) {
   continueSF <- TRUE
   if (!snowfall::sfIsRunning()) {
     suppressMessages(snowfall::sfInit(parallel=T, cpus=threads, useRscript=T))
     continueSF <- FALSE
   }
-  query <- snowfall::sfLapply(loci, function(l, depth, len.loci) {
-    q <- data.frame()
-    depth.sub <- subset(depth, grepl(l, seqnames))
-    if (nrow(depth.sub) > 0) {
-      gids <- as.character(unique(depth.sub$seqnames))
-      for (g in gids) {
-        tmp <- subset(depth, g==seqnames)
-        q <- rbind(q,
-                   data.frame(locus_tag=gsub(paste(l,"_",sep=""), "", g),
-                              depth=sum(tmp$count),
-                              coverage=sum(tmp$count)/len.loci[g],
-                              coverRatio=as.vector(nrow(tmp)/len.loci[g]),
-                              len=len.loci[g],
-                              mapped=nrow(tmp)))
-      }
+  depth_summary <- buildDepthSummary(depth, len.loci)
+  split_summary <- split(depth_summary[c("locus_tag", "depth", "coverage", "coverRatio", "len", "mapped")],
+                         depth_summary$locus)
+  empty_query <- data.frame(locus_tag=character(),
+                            depth=numeric(),
+                            coverage=numeric(),
+                            coverRatio=numeric(),
+                            len=numeric(),
+                            mapped=integer(),
+                            stringsAsFactors=FALSE)
+  query <- snowfall::sfLapply(loci, function(l, split_summary, empty_query) {
+    q <- split_summary[[l]]
+    if (is.null(q)) {
+      return(empty_query)
     }
-    return(q)
-  }, depth, len.loci)
+    rownames(q) <- NULL
+    q
+  }, split_summary, empty_query)
   if (!continueSF) {
     snowfall::sfStop()
   }
@@ -70,6 +100,30 @@ createQuery <- function(loci, depth, len.loci, threads=1) {
 #' @export
 #'
 #' @examples
+buildQueryLookup <- function(query) {
+  lapply(query, function(q) {
+    if (nrow(q) == 0) {
+      return(list(cover_ratio=numeric(),
+                  mapped=numeric(),
+                  coverage=numeric(),
+                  locus_tag=character()))
+    }
+
+    tags <- as.character(q$locus_tag)
+    cover_ratio <- q$coverRatio
+    names(cover_ratio) <- tags
+    mapped <- q$mapped
+    names(mapped) <- tags
+    coverage <- q$coverage
+    names(coverage) <- tags
+
+    list(cover_ratio=cover_ratio,
+         mapped=mapped,
+         coverage=coverage,
+         locus_tag=tags)
+  })
+}
+
 calcMLSTScore <- function(query,
                           loci,
                           mlstdb=mlstverse.NTM.db,
@@ -81,31 +135,33 @@ calcMLSTScore <- function(query,
     suppressMessages(snowfall::sfInit(parallel=T, cpus=threads, useRscript=T))
     continueSF <- FALSE
   }
-  g <- function(db_entry, query) {
+  query_lookup <- buildQueryLookup(query)
+  score_limit <- rowSums(!vapply(mlstdb[, loci, drop=FALSE], function(col) {
+    vapply(col, function(x) {-1 %in% x}, logical(1))
+  }, logical(nrow(mlstdb))))
+
+  g <- function(db_entry, query_lookup, score_limit, method) {
     db_entry <- lapply(db_entry, "[[", 1)
-    f <- function(l, db_entry, query) {
-      if (-1 %in% db_entry[[l]] | nrow(query[[l]]) == 0) {
+    f <- function(l, db_entry, query_lookup, method) {
+      if (-1 %in% db_entry[[l]] | length(query_lookup[[l]]$locus_tag) == 0) {
         return(0)
       }
-      #found <- query[[l]]$locus_tag %in% db_entry[[l]]
-      found <- db_entry[[l]] %in% query[[l]]$locus_tag
+      found <- db_entry[[l]] %in% query_lookup[[l]]$locus_tag
       if (any(found)) {
         if (method=="default") {
-          return(mean(subset(query[[l]], locus_tag %in% db_entry[[l]])$coverRatio) / length(db_entry[[l]]))
-          #return(max(subset(query[[l]], locus_tag %in% db_entry[[l]])$coverRatio))
-          #return(sum(subset(query[[l]], locus_tag %in% db_entry[[l]])$coverRatio) / length(db_entry[[l]]))
+          matched <- db_entry[[l]][found]
+          return(mean(query_lookup[[l]]$cover_ratio[matched]) / length(db_entry[[l]]))
         } else if (method=="sensitive") {
-          return(nrow(subset(query[[l]], locus_tag %in% db_entry[[l]])) / length(db_entry[[l]]))
+          return(sum(found) / length(db_entry[[l]]))
         }
       } else {
         return(0)
       }
     }
-    tmp <- sapply(names(db_entry), f, db_entry, query)
-    scoreLimit <- sum(!sapply(db_entry, function(x) {-1%in%x}))
-    if (scoreLimit > 0) {
+    tmp <- sapply(names(db_entry), f, db_entry, query_lookup, method)
+    if (score_limit > 0) {
       if (normalize) {
-        return(sum(tmp, na.rm=T) / scoreLimit)
+        return(sum(tmp, na.rm=T) / score_limit)
       } else {
         return(sum(tmp, na.rm=T))
       }
@@ -113,7 +169,7 @@ calcMLSTScore <- function(query,
       return(0)
     }
   }
-  scores <- snowfall::sfApply(mlstdb[,loci], 1, g, query)
+  scores <- snowfall::sfApply(mlstdb[,loci], 1, g, query_lookup, score_limit, method)
   if (!continueSF) {
     snowfall::sfStop()
   }
@@ -152,6 +208,33 @@ getCounts <- function(entry, query, loci, method="coverage", fill=TRUE) {
     x[i] <- 0
   }
   return(x)
+}
+
+getCountsFast <- function(entry, query_lookup, loci, method="coverage", fill=TRUE) {
+  x <- numeric(length(loci))
+  is_missing <- logical(length(loci))
+
+  for (idx in seq_along(loci)) {
+    l <- loci[idx]
+    lookup <- query_lookup[[l]]
+    entry_tags <- as.character(entry[[l]])
+    found <- entry_tags %in% lookup$locus_tag
+
+    if (any(found)) {
+      matched <- entry_tags[found]
+      values <- if (method == "coverage") lookup$coverage[matched] else lookup$mapped[matched]
+      x[idx] <- mean(values) / length(matched)
+    } else {
+      x[idx] <- NA_real_
+      is_missing[idx] <- TRUE
+    }
+  }
+
+  if (fill) {
+    valid_loci <- !vapply(entry[loci], function(x) {-1 %in% x}, logical(1))
+    x[is_missing & valid_loci] <- 0
+  }
+  x
 }
 
 
@@ -225,8 +308,8 @@ mlstverse <- function(filenames,
                    }
                })
     cat(paste("  Calculating MLST score...\n"))
-    snowfall::sfExport("normalize", "method")
     results <- calcMLSTScore(query[[filename]], loci, mlstdb=mlstdb, threads=threads, method=method, normalize=normalize)
+    query_lookup <- buildQueryLookup(query[[filename]])
 
     if (normalize) {
       i <- results > th.score
@@ -263,7 +346,13 @@ mlstverse <- function(filenames,
       } else {
         j <- which(i & mlstdb$genus==x[1] & mlstdb$species==x[2])
       }
-      q.dist <- snowfall::sfApply(mlstdb[loci][j,], 1, getCounts, query[[filename]], loci, fill=TRUE)
+      db_entries <- mlstdb[j, loci, drop=FALSE]
+      q.dist <- vapply(seq_len(nrow(db_entries)), function(idx) {
+        getCountsFast(db_entries[idx, , drop=FALSE], query_lookup, loci, fill=TRUE)
+      }, numeric(length(loci)))
+      if (!is.matrix(q.dist)) {
+        q.dist <- matrix(q.dist, nrow=length(loci), dimnames=list(NULL, NULL))
+      }
 
       q.mean <- apply(q.dist, 2, mean, na.rm=T)
       q.var <- apply(q.dist, 2, var, na.rm=T)
@@ -340,6 +429,3 @@ mlstverse <- function(filenames,
   snowfall::sfStop()
   return(list(query=query, score=score))
 }
-
-
-
