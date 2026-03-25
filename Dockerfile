@@ -3,7 +3,7 @@ FROM ubuntu:22.04
 MAINTAINER matsumoto <matsumoto@gen-info.osaka-u.ac.jp>
 
 ENV DEBIAN_FRONTEND=noninteractive
-ENV VERSION 0.1.4-46485e3
+ENV VERSION 0.1.4-06fd1fd
 
 RUN apt-get update \
  && apt-get -y install --no-install-recommends \
