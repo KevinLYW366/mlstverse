@@ -236,7 +236,13 @@ mlstverse <- function(filenames,
     speciesNames <- unique(apply(
       mlstdb[i, c("genus", "species")], 1, paste, collapse="|"))
     if (length(speciesNames) == 0) {
-      score[[filename]] <- NULL
+      score[[filename]] <- dplyr::data_frame(genus=character(),
+                                             species=character(),
+                                             strain=character(),
+                                             score=numeric(),
+                                             p.value=numeric(),
+                                             mean=numeric(),
+                                             var=numeric())
       next
     }
 
@@ -297,7 +303,7 @@ mlstverse <- function(filenames,
       } else {
         table.score.p <- subset(table.score, pvalue==max(table.score$pvalue, na.rm=T))
       }
-      table.score.p.s <- subset(table.score.p, score==max(score))
+      table.score.p.s <- subset(table.score.p, score == max(table.score.p$score))
       l <- table.score.p.s$index[order(table.score.p.s$pvalue, decreasing=T)[1]]
       if (is.na(l)) {
         tmp$mean <- c(tmp$mean, NA)
