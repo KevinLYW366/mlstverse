@@ -64,7 +64,7 @@ RUN git clone https://github.com/samtools/samtools \
 RUN Rscript -e 'install.packages(c("BiocManager", "remotes", "seqinr", "readr", "tidyr", "dplyr", "snowfall"), repos="https://cloud.r-project.org")' \
  && Rscript -e 'BiocManager::install("Rsamtools", ask=FALSE, update=FALSE)'
 
-RUN git clone https://github.com/KevinLYW366/mlstverse \
+RUN git clone -b perf/mlstverse-speedup https://github.com/KevinLYW366/mlstverse \
  && git clone https://github.com/KevinLYW366/mlstverse.Mycobacterium.db \
  && git clone https://github.com/KevinLYW366/mlstverse.pubmlst.db
 
