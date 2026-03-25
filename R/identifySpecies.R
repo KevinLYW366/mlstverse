@@ -55,7 +55,7 @@ buildDepthSummary <- function(depth, len.loci) {
              coverRatio=as.numeric(mapped/seq_len),
              len=seq_len,
              mapped=as.integer(mapped),
-             locus=sub("_.*$", "", seq_ids),
+             locus=vapply(strsplit(seq_ids, "_", fixed=TRUE), function(x) paste(x[1:2], collapse="_"), character(1)),
              stringsAsFactors=FALSE)
 }
 
