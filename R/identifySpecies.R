@@ -308,7 +308,9 @@ mlstverse <- function(filenames,
                    }
                })
     cat(paste("  Calculating MLST score...\n"))
-    results <- calcMLSTScore(query[[filename]], loci, mlstdb=mlstdb, threads=threads, method=method, normalize=normalize)
+    # sfApply() can return a 1-column matrix for some inputs; flatten it so
+    # downstream logical indexing against mlstdb always uses a plain vector.
+    results <- as.numeric(calcMLSTScore(query[[filename]], loci, mlstdb=mlstdb, threads=threads, method=method, normalize=normalize))
     query_lookup <- buildQueryLookup(query[[filename]])
 
     if (normalize) {
