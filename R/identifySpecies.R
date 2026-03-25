@@ -310,16 +310,16 @@ mlstverse <- function(filenames,
                    }
                })
     cat(paste("  Calculating MLST score...\n"))
-    results <- calcMLSTScore(query[[filename]], loci, mlstdb=mlstdb, threads=threads, method=method, normalize=normalize)
+    results <- as.vector(calcMLSTScore(query[[filename]], loci, mlstdb=mlstdb, threads=threads, method=method, normalize=normalize))
     query_lookup <- buildQueryLookup(query[[filename]])
 
     if (normalize) {
-      i <- results > th.score
+      i <- as.vector(results > th.score)
     } else {
-      i <- results > max(results)*th.score
+      i <- as.vector(results > max(results)*th.score)
     }
     speciesNames <- unique(apply(
-      mlstdb[i, c("genus", "species")], 1, paste, collapse="|"))
+      mlstdb[i, c("genus", "species"), drop=FALSE], 1, paste, collapse="|"))
     if (length(speciesNames) == 0) {
       score[[filename]] <- dplyr::data_frame(genus=character(),
                                              species=character(),
