@@ -140,7 +140,8 @@ calcMLSTScore <- function(query,
     vapply(col, function(x) {-1 %in% x}, logical(1))
   }, logical(nrow(mlstdb))))
 
-  g <- function(db_entry, query_lookup, score_limit, method) {
+  g <- function(idx, mlstdb, loci, query_lookup, score_limit, method, normalize) {
+    db_entry <- mlstdb[idx, loci, drop=FALSE]
     db_entry <- lapply(db_entry, "[[", 1)
     f <- function(l, db_entry, query_lookup, method) {
       if (-1 %in% db_entry[[l]] | length(query_lookup[[l]]$locus_tag) == 0) {
@@ -159,9 +160,10 @@ calcMLSTScore <- function(query,
       }
     }
     tmp <- sapply(names(db_entry), f, db_entry, query_lookup, method)
-    if (score_limit > 0) {
+    row_score_limit <- score_limit[idx]
+    if (row_score_limit > 0) {
       if (normalize) {
-        return(sum(tmp, na.rm=T) / score_limit)
+        return(sum(tmp, na.rm=T) / row_score_limit)
       } else {
         return(sum(tmp, na.rm=T))
       }
@@ -169,7 +171,7 @@ calcMLSTScore <- function(query,
       return(0)
     }
   }
-  scores <- snowfall::sfApply(mlstdb[,loci], 1, g, query_lookup, score_limit, method)
+  scores <- unlist(snowfall::sfLapply(seq_len(nrow(mlstdb)), g, mlstdb, loci, query_lookup, score_limit, method, normalize), use.names=FALSE)
   if (!continueSF) {
     snowfall::sfStop()
   }
@@ -308,9 +310,7 @@ mlstverse <- function(filenames,
                    }
                })
     cat(paste("  Calculating MLST score...\n"))
-    # sfApply() can return a 1-column matrix for some inputs; flatten it so
-    # downstream logical indexing against mlstdb always uses a plain vector.
-    results <- as.numeric(calcMLSTScore(query[[filename]], loci, mlstdb=mlstdb, threads=threads, method=method, normalize=normalize))
+    results <- calcMLSTScore(query[[filename]], loci, mlstdb=mlstdb, threads=threads, method=method, normalize=normalize)
     query_lookup <- buildQueryLookup(query[[filename]])
 
     if (normalize) {
