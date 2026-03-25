@@ -49,7 +49,7 @@ buildDepthSummary <- function(depth, len.loci) {
   total_depth <- vapply(split_depth, sum, numeric(1))
   seq_len <- as.numeric(len.loci[seq_ids])
 
-  data.frame(locus_tag=sub("^[^_]*_", "", seq_ids),
+  data.frame(locus_tag=sub("^[^_]*_[^_]*_", "", seq_ids),
              depth=total_depth,
              coverage=total_depth/seq_len,
              coverRatio=as.numeric(mapped/seq_len),
@@ -136,21 +136,23 @@ calcMLSTScore <- function(query,
     continueSF <- FALSE
   }
   query_lookup <- buildQueryLookup(query)
+  # Preserve the original sfApply row semantics: during score calculation,
+  # each locus uses only the first allele value from the database row.
   score_limit <- rowSums(!vapply(mlstdb[, loci, drop=FALSE], function(col) {
-    vapply(col, function(x) {-1 %in% x}, logical(1))
+    vapply(col, function(x) {x[[1]] == -1}, logical(1))
   }, logical(nrow(mlstdb))))
 
   g <- function(idx, mlstdb, loci, query_lookup, score_limit, method, normalize) {
     db_entry <- mlstdb[idx, loci, drop=FALSE]
-    db_entry <- lapply(db_entry, "[[", 1)
+    db_entry <- lapply(db_entry, function(x) x[[1]][1])
     f <- function(l, db_entry, query_lookup, method) {
-      if (-1 %in% db_entry[[l]] | length(query_lookup[[l]]$locus_tag) == 0) {
+      if (db_entry[[l]] == -1 | length(query_lookup[[l]]$locus_tag) == 0) {
         return(0)
       }
       found <- db_entry[[l]] %in% query_lookup[[l]]$locus_tag
       if (any(found)) {
         if (method=="default") {
-          matched <- db_entry[[l]][found]
+          matched <- as.character(db_entry[[l]][found])
           return(mean(query_lookup[[l]]$cover_ratio[matched]) / length(db_entry[[l]]))
         } else if (method=="sensitive") {
           return(sum(found) / length(db_entry[[l]]))
@@ -213,6 +215,7 @@ getCounts <- function(entry, query, loci, method="coverage", fill=TRUE) {
 }
 
 getCountsFast <- function(entry, query_lookup, loci, method="coverage", fill=TRUE) {
+  entry <- lapply(entry, function(x) x[[1]])
   x <- numeric(length(loci))
   is_missing <- logical(length(loci))
 
